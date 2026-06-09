@@ -740,26 +740,64 @@ void fetchWeather() {
             struct tm timeinfo;
             getLocalTime(&timeinfo);
             int today = timeinfo.tm_mday;
-            int forecastIdx = 0;
-            int lastDay = -1;
+            
+            // Primeiro passo: encontrar min/max reais de cada dia futuro
+            // Estrutura temporária para acumular dados por dia
+            struct DayData {
+                int day;
+                int wday;
+                float tMin;
+                float tMax;
+                String icon;
+                bool hasData;
+            };
+            DayData days[5] = {{0,0,99,-99,"",false},{0,0,99,-99,"",false},{0,0,99,-99,"",false},{0,0,99,-99,"",false},{0,0,99,-99,"",false}};
+            int dayCount = 0;
+            
             for (JsonObject item : list) {
-                if (forecastIdx >= 3) break;
                 long dt = item["dt"];
                 struct tm foreTime;
                 time_t rawTime = dt + (gmtOffset * 3600);
                 gmtime_r(&rawTime, &foreTime);
                 int fDay = foreTime.tm_mday;
-                if (fDay == today || fDay == lastDay) continue;
+                
+                if (fDay == today) continue;
+                
+                // Encontra ou cria entrada para este dia
+                int idx = -1;
+                for (int i = 0; i < dayCount; i++) {
+                    if (days[i].day == fDay) { idx = i; break; }
+                }
+                if (idx == -1) {
+                    if (dayCount >= 5) continue;
+                    idx = dayCount++;
+                    days[idx].day = fDay;
+                    days[idx].wday = foreTime.tm_wday;
+                    days[idx].hasData = true;
+                }
+                
+                // Acumula min/max
+                float t = item["main"]["temp"];
+                if (t < days[idx].tMin) days[idx].tMin = t;
+                if (t > days[idx].tMax) days[idx].tMax = t;
+                
+                // Pega ícone do meio-dia
                 int fHour = foreTime.tm_hour;
                 if (fHour >= 11 && fHour <= 14) {
-                    forecast[forecastIdx].tempMin = item["main"]["temp_min"];
-                    forecast[forecastIdx].tempMax = item["main"]["temp_max"];
-                    forecast[forecastIdx].icon = item["weather"][0]["icon"].as<String>();
-                    forecast[forecastIdx].dayName = String(diasSemana[foreTime.tm_wday]);
-                    forecast[forecastIdx].valid = true;
-                    lastDay = fDay;
-                    forecastIdx++;
+                    days[idx].icon = item["weather"][0]["icon"].as<String>();
                 }
+            }
+            
+            // Copia os primeiros 3 dias para o forecast
+            int copied = 0;
+            for (int i = 0; i < dayCount && copied < 3; i++) {
+                if (!days[i].hasData) continue;
+                forecast[copied].tempMin = days[i].tMin;
+                forecast[copied].tempMax = days[i].tMax;
+                forecast[copied].icon = days[i].icon.length() > 0 ? days[i].icon : "03d";
+                forecast[copied].dayName = String(diasSemana[days[i].wday]);
+                forecast[copied].valid = true;
+                copied++;
             }
         }
     }
