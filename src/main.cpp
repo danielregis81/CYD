@@ -74,6 +74,8 @@ String savedSSID = "";
 String savedPassword = "";
 String apiKey = "";
 String cityName = "Florianopolis";
+String latitude = "-27.5954";
+String longitude = "-48.5480";
 int gmtOffset = -3;
 
 // ========== TEMA ==========
@@ -140,6 +142,14 @@ const char* diasCompletos[] = {"Domingo", "Segunda", "Terca", "Quarta", "Quinta"
 const char* meses[] = {"Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"};
 
 // ========== CORES ==========
+// MADCTL corrigido para RGB no setup - cores padrão funcionam
+#define MY_YELLOW    0xFFE0
+#define MY_CYAN      0x07FF
+#define MY_ORANGE    0xFD20
+#define MY_RED       0xF800
+#define MY_GREEN     0x07E0
+#define MY_BLUE      0x001F
+
 // Cinzas são neutros (não dependem de RGB/BGR)
 #define COLOR_DARK_BG      0x0000
 #define COLOR_DARK_CARD    0x18E3
@@ -204,18 +214,22 @@ void loadConfig() {
     savedPassword = preferences.getString("pass", "");
     apiKey = preferences.getString("apikey", "");
     cityName = preferences.getString("city", "Florianopolis");
+    latitude = preferences.getString("lat", "-27.5954");
+    longitude = preferences.getString("lon", "-48.5480");
     gmtOffset = preferences.getInt("gmt", -3);
     darkTheme = preferences.getBool("theme", true);
     preferences.end();
     loadAlarms();
 }
 
-void saveConfig(String ssid, String pass, String key, String city, int gmt) {
+void saveConfig(String ssid, String pass, String key, String city, String lat, String lon, int gmt) {
     preferences.begin("relogio", false);
     preferences.putString("ssid", ssid);
     preferences.putString("pass", pass);
     preferences.putString("apikey", key);
     preferences.putString("city", city);
+    preferences.putString("lat", lat);
+    preferences.putString("lon", lon);
     preferences.putInt("gmt", gmt);
     preferences.end();
 }
@@ -245,7 +259,7 @@ void applyTheme() {
         cardColor  = COLOR_DARK_CARD;
         cardBorder = COLOR_DARK_BORDER;
         textColor  = COLOR_WARM_WHITE;
-        accentColor = TFT_CYAN;
+        accentColor = MY_CYAN;
         dimColor   = 0x4208;
     } else {
         bgColor    = COLOR_LIGHT_BG;
@@ -284,9 +298,9 @@ bool touchInZone(int tx, int ty, int zx, int zy, int zw, int zh) {
 
 void drawWeatherIcon(int cx, int cy, String icon, int size) {
     // Usar constantes da TFT_eSPI que já respeitam BGR/RGB do driver
-    uint16_t sunColor = TFT_YELLOW;
+    uint16_t sunColor = MY_YELLOW;
     uint16_t cloudColor = darkTheme ? 0xC618 : 0x8410;
-    uint16_t rainColor = TFT_BLUE;
+    uint16_t rainColor = MY_BLUE;
     
     if (icon.startsWith("01")) {
         // Sol limpo - amarelo
@@ -327,7 +341,7 @@ void drawWeatherIcon(int cx, int cy, String icon, int size) {
     } else if (icon.startsWith("11")) {
         // Tempestade
         tft.fillRoundRect(cx - size, cy - size/2, size*2, size*2/3, size/3, cloudColor);
-        tft.fillTriangle(cx, cy+size/4, cx+4, cy+size/4, cx+2, cy+size, TFT_YELLOW);
+        tft.fillTriangle(cx, cy+size/4, cx+4, cy+size/4, cx+2, cy+size, MY_YELLOW);
     } else if (icon.startsWith("13")) {
         // Neve
         tft.fillRoundRect(cx - size, cy - size/2, size*2, size*2/3, size/3, cloudColor);
@@ -366,7 +380,7 @@ void drawClockScreen() {
     for (int i = 0; i < MAX_ALARMS; i++) {
         if (alarms[i].enabled) { hasActive = true; break; }
     }
-    uint16_t alBtnColor = hasActive ? TFT_ORANGE : dimColor;
+    uint16_t alBtnColor = hasActive ? MY_ORANGE : dimColor;
     tft.fillRoundRect(BTN_ALARM_X, BTN_ALARM_Y, BTN_ALARM_W, BTN_ALARM_H, 4, bgColor);
     tft.drawRoundRect(BTN_ALARM_X, BTN_ALARM_Y, BTN_ALARM_W, BTN_ALARM_H, 4, alBtnColor);
     tft.setTextColor(alBtnColor, bgColor);
@@ -573,7 +587,7 @@ void drawAlarmsScreen() {
         }
         
         // Indicador ativo (bolinha verde)
-        tft.fillCircle(SCREEN_WIDTH - 24, rowY + 16, 5, TFT_GREEN);
+        tft.fillCircle(SCREEN_WIDTH - 24, rowY + 16, 5, MY_GREEN);
     }
     
     if (!anyAlarm) {
@@ -603,8 +617,8 @@ void fetchWeather() {
     if (apiKey.length() == 0 || WiFi.status() != WL_CONNECTED) return;
     
     HTTPClient http;
-    String url = "http://api.openweathermap.org/data/2.5/weather?q=" + cityName 
-                 + "&appid=" + apiKey + "&units=metric&lang=pt_br";
+    String url = "http://api.openweathermap.org/data/2.5/weather?lat=" + latitude 
+                 + "&lon=" + longitude + "&appid=" + apiKey + "&units=metric&lang=pt_br";
     
     http.begin(url);
     int httpCode = http.GET();
@@ -626,8 +640,8 @@ void fetchWeather() {
     http.end();
     
     // Forecast
-    url = "http://api.openweathermap.org/data/2.5/forecast?q=" + cityName 
-          + "&appid=" + apiKey + "&units=metric&lang=pt_br";
+    url = "http://api.openweathermap.org/data/2.5/forecast?lat=" + latitude 
+          + "&lon=" + longitude + "&appid=" + apiKey + "&units=metric&lang=pt_br";
     http.begin(url);
     httpCode = http.GET();
     if (httpCode == 200) {
@@ -707,15 +721,15 @@ void handleAlarmDisplay() {
         alarmFlashState = !alarmFlashState;
         
         if (alarmFlashState) {
-            tft.fillScreen(TFT_YELLOW);
-            tft.setTextColor(TFT_RED, TFT_YELLOW);
+            tft.fillScreen(MY_YELLOW);
+            tft.setTextColor(MY_RED, MY_YELLOW);
             tft.setTextDatum(MC_DATUM);
             tft.drawString("ALARME!", SCREEN_WIDTH/2, SCREEN_HEIGHT/2 - 35, 4);
             for (int i = 0; i < MAX_ALARMS; i++) {
                 if (alarms[i].triggered && alarms[i].enabled) {
                     char alStr[6];
                     snprintf(alStr, sizeof(alStr), "%02d:%02d", alarms[i].hour, alarms[i].minute);
-                    tft.setTextColor(TFT_BLACK, TFT_YELLOW);
+                    tft.setTextColor(TFT_BLACK, MY_YELLOW);
                     tft.drawString(alStr, SCREEN_WIDTH/2, SCREEN_HEIGHT/2 + 15, 7);
                     if (strlen(alarms[i].label) > 0) {
                         tft.drawString(alarms[i].label, SCREEN_WIDTH/2, SCREEN_HEIGHT/2 + 60, 2);
@@ -723,11 +737,11 @@ void handleAlarmDisplay() {
                     break;
                 }
             }
-            tft.setTextColor(0x4208, TFT_YELLOW);
+            tft.setTextColor(0x4208, MY_YELLOW);
             tft.drawString("Toque para desligar", SCREEN_WIDTH/2, SCREEN_HEIGHT - 25, 2);
         } else {
-            tft.fillScreen(TFT_RED);
-            tft.setTextColor(TFT_WHITE, TFT_RED);
+            tft.fillScreen(MY_RED);
+            tft.setTextColor(TFT_WHITE, MY_RED);
             tft.setTextDatum(MC_DATUM);
             tft.drawString("ALARME!", SCREEN_WIDTH/2, SCREEN_HEIGHT/2, 4);
         }
@@ -750,15 +764,15 @@ void drawAPScreen() {
     tft.fillScreen(TFT_BLACK);
     tft.fillRoundRect(10, 10, SCREEN_WIDTH - 20, SCREEN_HEIGHT - 20, 12, COLOR_DARK_CARD);
     tft.setTextDatum(MC_DATUM);
-    tft.setTextColor(TFT_CYAN, COLOR_DARK_CARD);
+    tft.setTextColor(MY_CYAN, COLOR_DARK_CARD);
     tft.drawString("CONFIGURACAO", SCREEN_WIDTH/2, 45, 4);
     tft.setTextColor(TFT_WHITE, COLOR_DARK_CARD);
     tft.drawString("Conecte no WiFi:", SCREEN_WIDTH/2, 85, 2);
-    tft.setTextColor(TFT_ORANGE, COLOR_DARK_CARD);
+    tft.setTextColor(MY_ORANGE, COLOR_DARK_CARD);
     tft.drawString(AP_SSID, SCREEN_WIDTH/2, 115, 4);
     tft.setTextColor(TFT_WHITE, COLOR_DARK_CARD);
     tft.drawString("Senha: " + String(AP_PASS), SCREEN_WIDTH/2, 148, 2);
-    tft.setTextColor(TFT_CYAN, COLOR_DARK_CARD);
+    tft.setTextColor(MY_CYAN, COLOR_DARK_CARD);
     tft.drawString("http://192.168.4.1", SCREEN_WIDTH/2, 180, 2);
     tft.setTextColor(0x4208, COLOR_DARK_CARD);
     tft.drawString("abra no navegador", SCREEN_WIDTH/2, 205, 1);
@@ -795,7 +809,7 @@ void handleRoot() {
     page += "<input type=\"text\" name=\"ssid\" value=\"" + savedSSID + "\" required>";
     page += "<label>Senha do WiFi</label>";
     page += "<input type=\"password\" name=\"pass\" value=\"" + savedPassword + "\">";
-    page += "<div class=\"row\"><div><label>Cidade</label>";
+    page += "<div class=\"row\"><div><label>Cidade (nome p/ display)</label>";
     page += "<input type=\"text\" name=\"city\" value=\"" + cityName + "\"></div>";
     page += "<div><label>Fuso (GMT)</label><select name=\"gmt\">";
     
@@ -807,6 +821,11 @@ void handleRoot() {
         page += ">" + String(gmtLabels[i]) + "</option>";
     }
     page += "</select></div></div>";
+    
+    page += "<div class=\"row\"><div><label>Latitude</label>";
+    page += "<input type=\"text\" name=\"lat\" value=\"" + latitude + "\" placeholder=\"-27.5954\"></div>";
+    page += "<div><label>Longitude</label>";
+    page += "<input type=\"text\" name=\"lon\" value=\"" + longitude + "\" placeholder=\"-48.5480\"></div></div>";
     
     page += "<label>API Key OpenWeatherMap</label>";
     page += "<input type=\"text\" name=\"apikey\" value=\"" + apiKey + "\">";
@@ -839,6 +858,8 @@ void handleSave() {
     String pass = server.arg("pass");
     String key = server.arg("apikey");
     String city = server.arg("city");
+    String lat = server.arg("lat");
+    String lon = server.arg("lon");
     int gmt = server.arg("gmt").toInt();
     
     if (ssid.length() == 0) {
@@ -846,7 +867,9 @@ void handleSave() {
         return;
     }
     if (city.length() == 0) city = "Florianopolis";
-    saveConfig(ssid, pass, key, city, gmt);
+    if (lat.length() == 0) lat = "-27.5954";
+    if (lon.length() == 0) lon = "-48.5480";
+    saveConfig(ssid, pass, key, city, lat, lon, gmt);
     
     for (int i = 0; i < MAX_ALARMS; i++) {
         char keyOn[10], keyTime[12], keyLbl[12];
@@ -1011,9 +1034,10 @@ void setup() {
     
     tft.init();
     tft.setRotation(1);
-    // Corrige ordem de cores: troca de BGR para RGB via MADCTL
-    tft.writecommand(0x36);  // MADCTL
-    tft.writedata(0x28);     // MV=1, MX=0, MY=0, RGB order (sem BGR)
+    // Após setRotation, corrige RGB order no MADCTL
+    // Rotation 1 com ILI9341_2 seta MADCTL=0x28 (BGR). Trocamos para 0x20 (RGB)
+    tft.writecommand(0x36);
+    tft.writedata(0xE0);  // MY=1, MX=1, MV=1, RGB order
     tft.fillScreen(TFT_BLACK);
     
     pinMode(TFT_BL, OUTPUT);
