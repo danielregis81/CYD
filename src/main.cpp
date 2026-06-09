@@ -319,6 +319,58 @@ bool touchInZone(int tx, int ty, int zx, int zy, int zw, int zh) {
 }
 
 // =====================================================================
+// REMOVER ACENTOS UTF-8
+// =====================================================================
+
+String removeAccents(String input) {
+    String output = "";
+    for (unsigned int i = 0; i < input.length(); i++) {
+        uint8_t c = (uint8_t)input[i];
+        if (c < 0x80) {
+            // ASCII normal
+            output += (char)c;
+        } else if (c == 0xC3 && i + 1 < input.length()) {
+            // Sequência UTF-8 de 2 bytes (0xC3 + próximo byte)
+            i++;
+            uint8_t next = (uint8_t)input[i];
+            switch (next) {
+                case 0xA0: case 0xA1: case 0xA2: case 0xA3: case 0xA4: case 0xA5:
+                    output += 'a'; break;  // à á â ã ä å
+                case 0x80: case 0x81: case 0x82: case 0x83: case 0x84: case 0x85:
+                    output += 'A'; break;  // À Á Â Ã Ä Å
+                case 0xA8: case 0xA9: case 0xAA: case 0xAB:
+                    output += 'e'; break;  // è é ê ë
+                case 0x88: case 0x89: case 0x8A: case 0x8B:
+                    output += 'E'; break;  // È É Ê Ë
+                case 0xAC: case 0xAD: case 0xAE: case 0xAF:
+                    output += 'i'; break;  // ì í î ï
+                case 0x8C: case 0x8D: case 0x8E: case 0x8F:
+                    output += 'I'; break;  // Ì Í Î Ï
+                case 0xB2: case 0xB3: case 0xB4: case 0xB5: case 0xB6:
+                    output += 'o'; break;  // ò ó ô õ ö
+                case 0x92: case 0x93: case 0x94: case 0x95: case 0x96:
+                    output += 'O'; break;  // Ò Ó Ô Õ Ö
+                case 0xB9: case 0xBA: case 0xBB: case 0xBC:
+                    output += 'u'; break;  // ù ú û ü
+                case 0x99: case 0x9A: case 0x9B: case 0x9C:
+                    output += 'U'; break;  // Ù Ú Û Ü
+                case 0xA7: output += 'c'; break;  // ç
+                case 0x87: output += 'C'; break;  // Ç
+                case 0xB1: output += 'n'; break;  // ñ
+                case 0x91: output += 'N'; break;  // Ñ
+                default: output += '?'; break;
+            }
+        } else if (c >= 0xC0) {
+            // Outros multi-byte UTF-8 - pula
+            if (c >= 0xE0 && i + 2 < input.length()) i += 2;
+            else if (c >= 0xC0 && i + 1 < input.length()) i += 1;
+            output += '?';
+        }
+    }
+    return output;
+}
+
+// =====================================================================
 // WEATHER ICONS - cores corrigidas
 // =====================================================================
 
@@ -667,8 +719,10 @@ void fetchWeather() {
             currentWeather.description = doc["weather"][0]["description"].as<String>();
             currentWeather.icon = doc["weather"][0]["icon"].as<String>();
             currentWeather.valid = true;
-            if (currentWeather.description.length() > 0)
+            if (currentWeather.description.length() > 0) {
+                currentWeather.description = removeAccents(currentWeather.description);
                 currentWeather.description[0] = toupper(currentWeather.description[0]);
+            }
         }
     }
     http.end();
@@ -1023,8 +1077,11 @@ void handleTouch() {
                 
                 // Lê coordenadas do toque
                 TS_Point p = touchscreen.getPoint();
-                int tx = map(p.x, 200, 3700, 0, SCREEN_WIDTH);
-                int ty = map(p.y, 200, 3800, 0, SCREEN_HEIGHT);
+                // Calibração ajustada para MADCTL 0xE0
+                int tx = map(p.x, 3700, 200, 0, SCREEN_WIDTH);
+                int ty = map(p.y, 3800, 200, 0, SCREEN_HEIGHT);
+                
+                Serial.printf("Touch: raw(%d,%d) mapped(%d,%d)\n", p.x, p.y, tx, ty);
                 
                 if (currentState == STATE_CLOCK) {
                     // Verifica botão TEMA
