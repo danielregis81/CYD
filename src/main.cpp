@@ -82,6 +82,12 @@ int gmtOffset = -3;
 bool darkTheme = true;
 uint16_t bgColor, textColor, accentColor, dimColor, cardColor, cardBorder;
 
+// ========== BRILHO ==========
+// Níveis: 25%, 50%, 75%, 100%
+const uint8_t brightnessLevels[] = {64, 128, 192, 255};
+const char* brightnessLabels[] = {"25", "50", "75", "100"};
+uint8_t brightnessIdx = 3;  // Padrão: 100%
+
 // ========== WEATHER ==========
 struct WeatherData {
     float temp;
@@ -129,6 +135,12 @@ bool touchActive = false;
 #define BTN_ALARM_Y 36
 #define BTN_ALARM_W 36
 #define BTN_ALARM_H 22
+
+// Botão brilho: abaixo do botão alarmes, lado esquerdo
+#define BTN_BRIGHT_X 10
+#define BTN_BRIGHT_Y 62
+#define BTN_BRIGHT_W 36
+#define BTN_BRIGHT_H 22
 
 // Botão voltar (na tela de alarmes)
 #define BTN_BACK_X 10
@@ -218,6 +230,7 @@ void loadConfig() {
     longitude = preferences.getString("lon", "-48.5480");
     gmtOffset = preferences.getInt("gmt", -3);
     darkTheme = preferences.getBool("theme", true);
+    brightnessIdx = preferences.getUChar("bright", 3);
     preferences.end();
     loadAlarms();
 }
@@ -269,6 +282,19 @@ void applyTheme() {
         accentColor = 0x01CF;
         dimColor   = 0x9CF3;
     }
+}
+
+void setBrightness(uint8_t level) {
+    ledcWrite(0, level);
+}
+
+void cycleBrightness() {
+    brightnessIdx = (brightnessIdx + 1) % 4;
+    setBrightness(brightnessLevels[brightnessIdx]);
+    // Salva no NVS
+    preferences.begin("relogio", false);
+    preferences.putUChar("bright", brightnessIdx);
+    preferences.end();
 }
 
 // =====================================================================
@@ -386,6 +412,14 @@ void drawClockScreen() {
     tft.setTextColor(alBtnColor, bgColor);
     tft.setTextDatum(MC_DATUM);
     tft.drawString("AL", BTN_ALARM_X + BTN_ALARM_W/2, BTN_ALARM_Y + BTN_ALARM_H/2 + 1, 1);
+    
+    // Botão BRILHO (esquerda, embaixo do alarme)
+    tft.fillRoundRect(BTN_BRIGHT_X, BTN_BRIGHT_Y, BTN_BRIGHT_W, BTN_BRIGHT_H, 4, bgColor);
+    tft.drawRoundRect(BTN_BRIGHT_X, BTN_BRIGHT_Y, BTN_BRIGHT_W, BTN_BRIGHT_H, 4, dimColor);
+    tft.setTextColor(dimColor, bgColor);
+    tft.setTextDatum(MC_DATUM);
+    String brLabel = String(brightnessLabels[brightnessIdx]) + "%";
+    tft.drawString(brLabel, BTN_BRIGHT_X + BTN_BRIGHT_W/2, BTN_BRIGHT_Y + BTN_BRIGHT_H/2 + 1, 1);
     
     // Card clima (abaixo)
     drawRoundRect(4, 135, SCREEN_WIDTH - 8, SCREEN_HEIGHT - 152, 8, cardColor);
@@ -695,6 +729,7 @@ void checkAlarms() {
             alarmRinging = true;
             alarmFlashTimer = millis();
             alarmFlashState = false;
+            setBrightness(255);  // Brilho máximo no alarme
             alarms[i].triggered = true;
             Serial.printf("ALARME! %02d:%02d - %s\n", alarms[i].hour, alarms[i].minute, alarms[i].label);
             return;
@@ -751,6 +786,7 @@ void handleAlarmDisplay() {
 void stopAlarm() {
     alarmRinging = false;
     currentState = STATE_CLOCK;
+    setBrightness(brightnessLevels[brightnessIdx]);  // Restaura brilho
     applyTheme();
     drawClockScreen();
     displayWeather();
@@ -1006,6 +1042,18 @@ void handleTouch() {
                         drawAlarmsScreen();
                         return;
                     }
+                    // Verifica botão BRILHO
+                    if (touchInZone(tx, ty, BTN_BRIGHT_X, BTN_BRIGHT_Y, BTN_BRIGHT_W, BTN_BRIGHT_H)) {
+                        cycleBrightness();
+                        // Redesenha só o botão de brilho
+                        tft.fillRoundRect(BTN_BRIGHT_X, BTN_BRIGHT_Y, BTN_BRIGHT_W, BTN_BRIGHT_H, 4, bgColor);
+                        tft.drawRoundRect(BTN_BRIGHT_X, BTN_BRIGHT_Y, BTN_BRIGHT_W, BTN_BRIGHT_H, 4, dimColor);
+                        tft.setTextColor(dimColor, bgColor);
+                        tft.setTextDatum(MC_DATUM);
+                        String brLabel = String(brightnessLabels[brightnessIdx]) + "%";
+                        tft.drawString(brLabel, BTN_BRIGHT_X + BTN_BRIGHT_W/2, BTN_BRIGHT_Y + BTN_BRIGHT_H/2 + 1, 1);
+                        return;
+                    }
                 } else if (currentState == STATE_ALARMS) {
                     // Botão voltar
                     if (touchInZone(tx, ty, BTN_BACK_X, BTN_BACK_Y, BTN_BACK_W, BTN_BACK_H)) {
@@ -1041,7 +1089,10 @@ void setup() {
     tft.fillScreen(TFT_BLACK);
     
     pinMode(TFT_BL, OUTPUT);
-    digitalWrite(TFT_BL, HIGH);
+    // Configura PWM para controle de brilho (canal 0, 5kHz, 8 bits)
+    ledcSetup(0, 5000, 8);
+    ledcAttachPin(TFT_BL, 0);
+    ledcWrite(0, brightnessLevels[brightnessIdx]);
     
     touchSPI.begin(XPT2046_CLK, XPT2046_MISO, XPT2046_MOSI, XPT2046_CS);
     touchscreen.begin(touchSPI);
