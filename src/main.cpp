@@ -275,12 +275,13 @@ void applyTheme() {
         accentColor = MY_CYAN;
         dimColor   = 0x4208;
     } else {
-        bgColor    = COLOR_LIGHT_BG;
-        cardColor  = COLOR_LIGHT_CARD;
-        cardBorder = COLOR_LIGHT_BORDER;
-        textColor  = 0x2104;
-        accentColor = 0x01CF;
-        dimColor   = 0x9CF3;
+        // Tema claro: fundo creme, cards branco quente, acentos azul escuro
+        bgColor    = 0xF79E;  // Creme claro
+        cardColor  = 0xFFFF;  // Branco
+        cardBorder = 0xC618;  // Cinza medio
+        textColor  = 0x1082;  // Quase preto (azul escuro)
+        accentColor = 0x01AF; // Azul marinho
+        dimColor   = 0x8C51;  // Cinza quente
     }
 }
 
