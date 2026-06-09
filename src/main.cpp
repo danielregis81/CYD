@@ -275,13 +275,13 @@ void applyTheme() {
         accentColor = MY_CYAN;
         dimColor   = 0x4208;
     } else {
-        // Tema claro: alto contraste
-        bgColor    = 0xE73C;  // Cinza claro (fundo)
-        cardColor  = 0xFFFF;  // Branco puro (cards)
-        cardBorder = 0xB596;  // Cinza borda
-        textColor  = 0x0000;  // Preto puro
-        accentColor = 0xF800; // Vermelho vivo (destaque)
-        dimColor   = 0x632C;  // Cinza escuro (legivel)
+        // Tema claro: fundo cinza claro, cards branco, acentos azul
+        bgColor    = COLOR_LIGHT_BG;
+        cardColor  = COLOR_LIGHT_CARD;
+        cardBorder = COLOR_LIGHT_BORDER;
+        textColor  = 0x2104;
+        accentColor = 0x01CF;
+        dimColor   = 0x9CF3;
     }
 }
 
