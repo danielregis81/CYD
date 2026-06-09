@@ -5,8 +5,10 @@
  * - Relógio NTP com visual moderno
  * - Clima atual + previsão 3 dias (OpenWeatherMap)
  * - Até 5 alarmes configuráveis pela interface web
- * - Ao disparar: tela pisca até tocar no display
- * - Toque curto: alterna tema | Toque longo (3s): reset config
+ * - Tela de alarmes (toque no ícone AL ou swipe)
+ * - Botão para alternar tema claro/escuro
+ * - IP visível no rodapé para acessar WebUI
+ * - Toque longo (3s): reset config
  */
 
 #include <Arduino.h>
@@ -46,7 +48,7 @@ struct Alarm {
     uint8_t hour;
     uint8_t minute;
     bool enabled;
-    bool triggered;  // já disparou hoje?
+    bool triggered;
     char label[20];
 };
 
@@ -64,7 +66,7 @@ DNSServer dnsServer;
 Preferences preferences;
 
 // ========== ESTADOS ==========
-enum AppState { STATE_AP_MODE, STATE_CONNECTING, STATE_CLOCK };
+enum AppState { STATE_AP_MODE, STATE_CONNECTING, STATE_CLOCK, STATE_ALARMS };
 AppState currentState = STATE_AP_MODE;
 
 // ========== CONFIG ==========
@@ -113,127 +115,44 @@ unsigned long lastTouchTime = 0;
 unsigned long touchStartTime = 0;
 bool touchActive = false;
 
+// ========== TOUCH ZONES (botões na tela) ==========
+// Botão tema: dentro do card, canto superior esquerdo
+#define BTN_THEME_X 10
+#define BTN_THEME_Y 10
+#define BTN_THEME_W 36
+#define BTN_THEME_H 22
+
+// Botão alarmes: abaixo do botão tema, lado esquerdo
+#define BTN_ALARM_X 10
+#define BTN_ALARM_Y 36
+#define BTN_ALARM_W 36
+#define BTN_ALARM_H 22
+
+// Botão voltar (na tela de alarmes)
+#define BTN_BACK_X 10
+#define BTN_BACK_Y 10
+#define BTN_BACK_W 50
+#define BTN_BACK_H 26
+
 // ========== STRINGS PT ==========
 const char* diasSemana[] = {"Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sab"};
 const char* diasCompletos[] = {"Domingo", "Segunda", "Terca", "Quarta", "Quinta", "Sexta", "Sabado"};
 const char* meses[] = {"Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"};
 
 // ========== CORES ==========
+// Cinzas são neutros (não dependem de RGB/BGR)
 #define COLOR_DARK_BG      0x0000
 #define COLOR_DARK_CARD    0x18E3
 #define COLOR_DARK_BORDER  0x2945
-#define COLOR_CYAN         0x07FF
 #define COLOR_WARM_WHITE   0xFFDE
-#define COLOR_ORANGE       0xFD20
-#define COLOR_LIGHT_BLUE   0x867F
 #define COLOR_LIGHT_BG     0xEF7D
 #define COLOR_LIGHT_CARD   0xFFFF
 #define COLOR_LIGHT_BORDER 0xD69A
-#define COLOR_RED          0xF800
-#define COLOR_ALARM_FLASH  0xFFE0  // Amarelo
 
 // =====================================================================
-// HTML DO PORTAL - COM ALARMES
 // =====================================================================
-const char HTML_PAGE[] PROGMEM = R"rawliteral(
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Relogio CYD</title>
-    <style>
-        *{box-sizing:border-box;margin:0;padding:0}
-        body{font-family:-apple-system,sans-serif;background:#0f0f23;color:#eee;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:16px}
-        .c{background:#1a1a3e;border-radius:16px;padding:24px;width:100%;max-width:460px;box-shadow:0 10px 40px rgba(0,0,0,0.4)}
-        h1{text-align:center;margin-bottom:4px;font-size:1.3em;color:#0ff}
-        .sub{text-align:center;color:#888;margin-bottom:18px;font-size:0.82em}
-        h2{color:#0ff;font-size:1em;margin:18px 0 10px;padding-top:14px;border-top:1px solid #333}
-        label{display:block;margin-bottom:3px;font-weight:500;color:#aaa;font-size:0.85em}
-        input,select{width:100%;padding:10px;border:1px solid #333;border-radius:8px;background:#0a1628;color:#fff;font-size:14px;margin-bottom:12px;outline:none}
-        input:focus,select:focus{border-color:#0ff}
-        .row{display:flex;gap:10px}
-        .row>div{flex:1}
-        button{width:100%;padding:13px;background:linear-gradient(135deg,#0ff,#00bcd4);border:none;border-radius:8px;color:#0a1628;font-size:15px;font-weight:bold;cursor:pointer;margin-top:8px}
-        button:active{transform:scale(0.98)}
-        .alarm-row{display:flex;gap:8px;align-items:center;margin-bottom:8px;background:#0a1628;padding:8px 10px;border-radius:8px}
-        .alarm-row input[type="time"]{width:100px;margin:0;padding:8px;flex-shrink:0}
-        .alarm-row input[type="text"]{flex:1;margin:0;padding:8px}
-        .alarm-row input[type="checkbox"]{width:20px;height:20px;margin:0;flex-shrink:0;accent-color:#0ff}
-        .alarm-label{color:#666;font-size:0.75em;display:flex;gap:8px;margin-bottom:4px}
-        .alarm-label span{flex:1}
-        .info{background:#0a1628;border-radius:8px;padding:10px;margin-top:14px;font-size:0.78em;color:#666;line-height:1.4}
-        .info a{color:#0ff}
-    </style>
-</head>
-<body>
-<div class="c">
-    <h1>&#9201; Relogio CYD</h1>
-    <p class="sub">WiFi + Clima + Alarmes</p>
-    <form action="/save" method="POST">
-        <label>Nome da Rede (SSID)</label>
-        <input type="text" name="ssid" placeholder="Sua rede WiFi" required>
-        <label>Senha do WiFi</label>
-        <input type="password" name="pass" placeholder="Senha">
-        <div class="row">
-            <div>
-                <label>Cidade</label>
-                <input type="text" name="city" placeholder="Florianopolis" value="Florianopolis">
-            </div>
-            <div>
-                <label>Fuso (GMT)</label>
-                <select name="gmt">
-                    <option value="-5">-5 Acre</option>
-                    <option value="-4">-4 Manaus</option>
-                    <option value="-3" selected>-3 Brasilia</option>
-                    <option value="-2">-2 Noronha</option>
-                    <option value="0">+0 Londres</option>
-                    <option value="1">+1 Europa</option>
-                </select>
-            </div>
-        </div>
-        <label>API Key OpenWeatherMap</label>
-        <input type="text" name="apikey" placeholder="Cole sua API key aqui">
-
-        <h2>&#9200; Alarmes</h2>
-        <div class="alarm-label"><span>Ativo</span><span>Hora</span><span>Descricao (opcional)</span></div>
-        <div class="alarm-row">
-            <input type="checkbox" name="al0_on">
-            <input type="time" name="al0_time" value="07:00">
-            <input type="text" name="al0_lbl" placeholder="Acordar">
-        </div>
-        <div class="alarm-row">
-            <input type="checkbox" name="al1_on">
-            <input type="time" name="al1_time" value="08:00">
-            <input type="text" name="al1_lbl" placeholder="Reuniao">
-        </div>
-        <div class="alarm-row">
-            <input type="checkbox" name="al2_on">
-            <input type="time" name="al2_time" value="12:00">
-            <input type="text" name="al2_lbl" placeholder="Almoco">
-        </div>
-        <div class="alarm-row">
-            <input type="checkbox" name="al3_on">
-            <input type="time" name="al3_time" value="18:00">
-            <input type="text" name="al3_lbl" placeholder="Exercicio">
-        </div>
-        <div class="alarm-row">
-            <input type="checkbox" name="al4_on">
-            <input type="time" name="al4_time" value="22:00">
-            <input type="text" name="al4_lbl" placeholder="Dormir">
-        </div>
-
-        <button type="submit">Salvar e Conectar</button>
-    </form>
-    <div class="info">
-        Clima: crie conta gratis em <a href="https://openweathermap.org/api" target="_blank">openweathermap.org</a> e cole a API key.<br>
-        Alarmes: a tela pisca ao disparar. Toque para desligar.
-    </div>
-</div>
-</body>
-</html>
-)rawliteral";
-
+// HTML
+// =====================================================================
 const char HTML_SUCCESS[] PROGMEM = R"rawliteral(
 <!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>OK</title><style>body{font-family:sans-serif;background:#0f0f23;color:#eee;display:flex;align-items:center;justify-content:center;min-height:100vh;text-align:center}.ok{color:#0f0;font-size:3em}</style>
@@ -252,7 +171,6 @@ void loadAlarms() {
         snprintf(keyM, sizeof(keyM), "m%d", i);
         snprintf(keyE, sizeof(keyE), "e%d", i);
         snprintf(keyL, sizeof(keyL), "l%d", i);
-        
         alarms[i].hour = preferences.getUChar(keyH, 0);
         alarms[i].minute = preferences.getUChar(keyM, 0);
         alarms[i].enabled = preferences.getBool(keyE, false);
@@ -272,7 +190,6 @@ void saveAlarms() {
         snprintf(keyM, sizeof(keyM), "m%d", i);
         snprintf(keyE, sizeof(keyE), "e%d", i);
         snprintf(keyL, sizeof(keyL), "l%d", i);
-        
         preferences.putUChar(keyH, alarms[i].hour);
         preferences.putUChar(keyM, alarms[i].minute);
         preferences.putBool(keyE, alarms[i].enabled);
@@ -290,7 +207,6 @@ void loadConfig() {
     gmtOffset = preferences.getInt("gmt", -3);
     darkTheme = preferences.getBool("theme", true);
     preferences.end();
-    
     loadAlarms();
 }
 
@@ -329,7 +245,7 @@ void applyTheme() {
         cardColor  = COLOR_DARK_CARD;
         cardBorder = COLOR_DARK_BORDER;
         textColor  = COLOR_WARM_WHITE;
-        accentColor = COLOR_CYAN;
+        accentColor = TFT_CYAN;
         dimColor   = 0x4208;
     } else {
         bgColor    = COLOR_LIGHT_BG;
@@ -342,7 +258,7 @@ void applyTheme() {
 }
 
 // =====================================================================
-// UI DRAWING
+// UI HELPERS
 // =====================================================================
 
 void drawRoundRect(int x, int y, int w, int h, int r, uint16_t color) {
@@ -350,44 +266,77 @@ void drawRoundRect(int x, int y, int w, int h, int r, uint16_t color) {
     tft.drawRoundRect(x, y, w, h, r, cardBorder);
 }
 
+void drawButton(int x, int y, int w, int h, const char* text, uint16_t bg, uint16_t fg) {
+    tft.fillRoundRect(x, y, w, h, 4, bg);
+    tft.drawRoundRect(x, y, w, h, 4, cardBorder);
+    tft.setTextColor(fg, bg);
+    tft.setTextDatum(MC_DATUM);
+    tft.drawString(text, x + w/2, y + h/2, 1);
+}
+
+bool touchInZone(int tx, int ty, int zx, int zy, int zw, int zh) {
+    return (tx >= zx && tx <= zx + zw && ty >= zy && ty <= zy + zh);
+}
+
+// =====================================================================
+// WEATHER ICONS - cores corrigidas
+// =====================================================================
+
 void drawWeatherIcon(int cx, int cy, String icon, int size) {
-    uint16_t sunColor = COLOR_ORANGE;
+    // Usar constantes da TFT_eSPI que já respeitam BGR/RGB do driver
+    uint16_t sunColor = TFT_YELLOW;
     uint16_t cloudColor = darkTheme ? 0xC618 : 0x8410;
-    uint16_t rainColor = COLOR_LIGHT_BLUE;
+    uint16_t rainColor = TFT_BLUE;
     
     if (icon.startsWith("01")) {
+        // Sol limpo - amarelo
         tft.fillCircle(cx, cy, size, sunColor);
         for (int i = 0; i < 8; i++) {
             float angle = i * PI / 4;
-            int x1 = cx + cos(angle) * (size + 3);
-            int y1 = cy + sin(angle) * (size + 3);
-            int x2 = cx + cos(angle) * (size + 6);
-            int y2 = cy + sin(angle) * (size + 6);
+            int x1 = cx + cos(angle) * (size + 2);
+            int y1 = cy + sin(angle) * (size + 2);
+            int x2 = cx + cos(angle) * (size + 5);
+            int y2 = cy + sin(angle) * (size + 5);
             tft.drawLine(x1, y1, x2, y2, sunColor);
         }
     } else if (icon.startsWith("02")) {
-        tft.fillCircle(cx - size/2, cy - size/3, size*2/3, sunColor);
-        tft.fillRoundRect(cx - size, cy - size/3, size*2, size, size/2, cloudColor);
+        // Sol parcial com nuvem
+        tft.fillCircle(cx - size/2, cy - size/2, size*2/3, sunColor);
+        // Raios do sol
+        for (int i = 0; i < 5; i++) {
+            float angle = -PI/2 + i * PI/5;
+            int x1 = (cx - size/2) + cos(angle) * (size*2/3 + 2);
+            int y1 = (cy - size/2) + sin(angle) * (size*2/3 + 2);
+            int x2 = (cx - size/2) + cos(angle) * (size*2/3 + 4);
+            int y2 = (cy - size/2) + sin(angle) * (size*2/3 + 4);
+            tft.drawLine(x1, y1, x2, y2, sunColor);
+        }
+        tft.fillRoundRect(cx - size, cy - size/4, size*2, size, size/3, cloudColor);
     } else if (icon.startsWith("03") || icon.startsWith("04")) {
+        // Nublado
         tft.fillCircle(cx - size/3, cy - size/4, size*2/3, cloudColor);
         tft.fillCircle(cx + size/3, cy - size/4, size/2, cloudColor);
         tft.fillRoundRect(cx - size, cy - size/6, size*2, size*2/3, size/3, cloudColor);
     } else if (icon.startsWith("09") || icon.startsWith("10")) {
+        // Chuva
         tft.fillRoundRect(cx - size, cy - size/2, size*2, size*2/3, size/3, cloudColor);
         for (int i = 0; i < 3; i++) {
             int rx = cx - size/2 + i * (size/2);
-            tft.drawLine(rx, cy + size/3, rx - 2, cy + size, rainColor);
+            tft.drawLine(rx, cy + size/4, rx - 2, cy + size, rainColor);
         }
     } else if (icon.startsWith("11")) {
+        // Tempestade
         tft.fillRoundRect(cx - size, cy - size/2, size*2, size*2/3, size/3, cloudColor);
-        tft.fillTriangle(cx-2, cy+size/4, cx+4, cy+size/4, cx+1, cy+size, TFT_YELLOW);
+        tft.fillTriangle(cx, cy+size/4, cx+4, cy+size/4, cx+2, cy+size, TFT_YELLOW);
     } else if (icon.startsWith("13")) {
+        // Neve
         tft.fillRoundRect(cx - size, cy - size/2, size*2, size*2/3, size/3, cloudColor);
         for (int i = 0; i < 3; i++) {
             int sx = cx - size/2 + i * (size/2);
             tft.fillCircle(sx, cy + size/2, 2, TFT_WHITE);
         }
     } else {
+        // Névoa
         for (int i = 0; i < 3; i++) {
             int ly = cy - size/3 + i * (size/3);
             tft.drawFastHLine(cx - size, ly, size*2, dimColor);
@@ -396,13 +345,45 @@ void drawWeatherIcon(int cx, int cy, String icon, int size) {
 }
 
 // =====================================================================
-// CLOCK SCREEN
+// TELA PRINCIPAL DO RELÓGIO
 // =====================================================================
 
 void drawClockScreen() {
     tft.fillScreen(bgColor);
-    drawRoundRect(4, 4, SCREEN_WIDTH - 8, 105, 8, cardColor);
-    drawRoundRect(4, 114, SCREEN_WIDTH - 8, SCREEN_HEIGHT - 118, 8, cardColor);
+    
+    // Card relógio (ocupa todo o topo)
+    drawRoundRect(4, 4, SCREEN_WIDTH - 8, 126, 8, cardColor);
+    
+    // Botão TEMA (esquerda, em cima)
+    tft.fillRoundRect(BTN_THEME_X, BTN_THEME_Y, BTN_THEME_W, BTN_THEME_H, 4, bgColor);
+    tft.drawRoundRect(BTN_THEME_X, BTN_THEME_Y, BTN_THEME_W, BTN_THEME_H, 4, accentColor);
+    tft.setTextColor(accentColor, bgColor);
+    tft.setTextDatum(MC_DATUM);
+    tft.drawString(darkTheme ? "LUZ" : "ESC", BTN_THEME_X + BTN_THEME_W/2, BTN_THEME_Y + BTN_THEME_H/2 + 1, 1);
+    
+    // Botão ALARMES (esquerda, embaixo do tema)
+    bool hasActive = false;
+    for (int i = 0; i < MAX_ALARMS; i++) {
+        if (alarms[i].enabled) { hasActive = true; break; }
+    }
+    uint16_t alBtnColor = hasActive ? TFT_ORANGE : dimColor;
+    tft.fillRoundRect(BTN_ALARM_X, BTN_ALARM_Y, BTN_ALARM_W, BTN_ALARM_H, 4, bgColor);
+    tft.drawRoundRect(BTN_ALARM_X, BTN_ALARM_Y, BTN_ALARM_W, BTN_ALARM_H, 4, alBtnColor);
+    tft.setTextColor(alBtnColor, bgColor);
+    tft.setTextDatum(MC_DATUM);
+    tft.drawString("AL", BTN_ALARM_X + BTN_ALARM_W/2, BTN_ALARM_Y + BTN_ALARM_H/2 + 1, 1);
+    
+    // Card clima (abaixo)
+    drawRoundRect(4, 135, SCREEN_WIDTH - 8, SCREEN_HEIGHT - 152, 8, cardColor);
+    
+    // IP discreto no rodapé
+    if (WiFi.status() == WL_CONNECTED) {
+        tft.setTextColor(dimColor, bgColor);
+        tft.setTextDatum(BC_DATUM);
+        String ipStr = "http://" + WiFi.localIP().toString();
+        tft.drawString(ipStr, SCREEN_WIDTH/2, SCREEN_HEIGHT - 2, 1);
+    }
+    
     lastTime = "";
     lastDate = "";
     lastSec = "";
@@ -424,50 +405,40 @@ void displayClock() {
     
     String currentTime = String(hourStr) + String(minStr);
     if (currentTime != lastTime) {
-        tft.fillRect(10, 14, SCREEN_WIDTH - 20, 62, cardColor);
+        // Limpa apenas a área central do relógio (não os botões)
+        tft.fillRect(50, 30, SCREEN_WIDTH - 100, 70, cardColor);
         tft.setTextColor(textColor, cardColor);
         tft.setTextDatum(MR_DATUM);
-        tft.drawString(hourStr, SCREEN_WIDTH/2 - 12, 45, 7);
+        tft.drawString(hourStr, SCREEN_WIDTH/2 - 12, 65, 7);
         tft.setTextDatum(ML_DATUM);
-        tft.drawString(minStr, SCREEN_WIDTH/2 + 12, 45, 7);
+        tft.drawString(minStr, SCREEN_WIDTH/2 + 12, 65, 7);
         lastTime = currentTime;
     }
     
     // Separador pulsante
     colonVisible = (timeinfo.tm_sec % 2 == 0);
     uint16_t colonColor = colonVisible ? accentColor : cardColor;
-    tft.fillCircle(SCREEN_WIDTH/2, 35, 3, colonColor);
-    tft.fillCircle(SCREEN_WIDTH/2, 52, 3, colonColor);
+    tft.fillCircle(SCREEN_WIDTH/2, 55, 3, colonColor);
+    tft.fillCircle(SCREEN_WIDTH/2, 72, 3, colonColor);
     
-    // Segundos
+    // Segundos (abaixo do botão AL, à direita)
     String currentSec = String(secStr);
     if (currentSec != lastSec) {
-        tft.fillRect(SCREEN_WIDTH - 45, 15, 35, 20, cardColor);
+        tft.fillRect(SCREEN_WIDTH - 46, 64, 38, 24, cardColor);
         tft.setTextColor(accentColor, cardColor);
         tft.setTextDatum(TR_DATUM);
-        tft.drawString(secStr, SCREEN_WIDTH - 12, 18, 4);
+        tft.drawString(secStr, SCREEN_WIDTH - 12, 66, 4);
         lastSec = currentSec;
     }
     
-    // Data
+    // Data (parte inferior do card)
     String currentDate = String(dateStr);
     if (currentDate != lastDate) {
-        tft.fillRect(10, 78, SCREEN_WIDTH - 20, 22, cardColor);
+        tft.fillRect(10, 102, SCREEN_WIDTH - 20, 22, cardColor);
         tft.setTextColor(dimColor, cardColor);
         tft.setTextDatum(MC_DATUM);
-        tft.drawString(dateStr, SCREEN_WIDTH/2, 89, 2);
+        tft.drawString(dateStr, SCREEN_WIDTH/2, 113, 2);
         lastDate = currentDate;
-    }
-    
-    // Indicador de alarme ativo (ícone pequeno)
-    bool hasActiveAlarm = false;
-    for (int i = 0; i < MAX_ALARMS; i++) {
-        if (alarms[i].enabled) { hasActiveAlarm = true; break; }
-    }
-    if (hasActiveAlarm) {
-        tft.setTextColor(COLOR_ORANGE, cardColor);
-        tft.setTextDatum(TL_DATUM);
-        tft.drawString("AL", 12, 18, 1);
     }
 }
 
@@ -476,8 +447,8 @@ void displayClock() {
 // =====================================================================
 
 void displayWeather() {
-    int cardY = 114;
-    int cardH = SCREEN_HEIGHT - 118;
+    int cardY = 135;
+    int cardH = SCREEN_HEIGHT - 152;
     
     tft.fillRect(6, cardY + 2, SCREEN_WIDTH - 12, cardH - 4, cardColor);
     
@@ -485,8 +456,8 @@ void displayWeather() {
         tft.setTextColor(dimColor, cardColor);
         tft.setTextDatum(MC_DATUM);
         if (apiKey.length() == 0) {
-            tft.drawString("Configure API key no portal", SCREEN_WIDTH/2, cardY + cardH/2 - 8, 2);
-            tft.drawString("(segure 3s para reconfigurar)", SCREEN_WIDTH/2, cardY + cardH/2 + 10, 1);
+            tft.drawString("Acesse o IP abaixo para configurar", SCREEN_WIDTH/2, cardY + cardH/2 - 6, 1);
+            tft.drawString("clima e alarmes via navegador", SCREEN_WIDTH/2, cardY + cardH/2 + 8, 1);
         } else {
             tft.drawString("Carregando clima...", SCREEN_WIDTH/2, cardY + cardH/2, 2);
         }
@@ -494,61 +465,133 @@ void displayWeather() {
     }
     
     int leftX = 12;
-    int topY = cardY + 8;
+    int topY = cardY + 6;
     
-    drawWeatherIcon(leftX + 22, topY + 22, currentWeather.icon, 12);
+    // Ícone grande
+    drawWeatherIcon(leftX + 22, topY + 20, currentWeather.icon, 12);
     
+    // Temperatura
     char tempStr[8];
     snprintf(tempStr, sizeof(tempStr), "%.0f", currentWeather.temp);
     tft.setTextColor(textColor, cardColor);
     tft.setTextDatum(TL_DATUM);
-    tft.drawString(tempStr, leftX + 45, topY + 4, 6);
+    tft.drawString(tempStr, leftX + 44, topY + 2, 6);
     
     int tempWidth = tft.textWidth(tempStr, 6);
     tft.setTextColor(accentColor, cardColor);
-    tft.drawString("o", leftX + 47 + tempWidth, topY + 2, 2);
+    tft.drawString("o", leftX + 46 + tempWidth, topY, 2);
     tft.setTextColor(textColor, cardColor);
-    tft.drawString("C", leftX + 55 + tempWidth, topY + 8, 4);
+    tft.drawString("C", leftX + 54 + tempWidth, topY + 6, 4);
     
+    // Descrição
     tft.setTextColor(dimColor, cardColor);
     tft.setTextDatum(TL_DATUM);
-    tft.drawString(currentWeather.description, leftX + 2, topY + 48, 2);
+    tft.drawString(currentWeather.description, leftX + 2, topY + 44, 2);
     
+    // Min/Max + Humidade
     char infoStr[30];
     snprintf(infoStr, sizeof(infoStr), "%.0f~%.0f C  %d%%", 
              currentWeather.tempMin, currentWeather.tempMax, currentWeather.humidity);
-    tft.setTextColor(dimColor, cardColor);
-    tft.drawString(infoStr, leftX + 2, topY + 66, 1);
+    tft.drawString(infoStr, leftX + 2, topY + 62, 1);
     
+    // Cidade
     tft.setTextColor(accentColor, cardColor);
-    tft.drawString(cityName, leftX + 2, topY + 80, 1);
+    tft.drawString(cityName, leftX + 2, topY + 75, 1);
     
-    // Previsão 3 dias
+    // Previsão lado direito
     int rightX = SCREEN_WIDTH/2 + 20;
-    int foreY = topY + 4;
+    int foreY = topY + 2;
     
-    tft.drawFastVLine(SCREEN_WIDTH/2 + 10, cardY + 8, cardH - 16, cardBorder);
+    tft.drawFastVLine(SCREEN_WIDTH/2 + 10, cardY + 6, cardH - 12, cardBorder);
     
     tft.setTextColor(accentColor, cardColor);
     tft.setTextDatum(TL_DATUM);
     tft.drawString("Proximos dias", rightX, foreY, 1);
-    foreY += 14;
+    foreY += 12;
     
     for (int i = 0; i < 3; i++) {
         if (!forecast[i].valid) continue;
-        int rowY = foreY + i * 26;
+        int rowY = foreY + i * 24;
         
         tft.setTextColor(textColor, cardColor);
         tft.setTextDatum(TL_DATUM);
-        tft.drawString(forecast[i].dayName, rightX, rowY + 4, 2);
+        tft.drawString(forecast[i].dayName, rightX, rowY + 3, 2);
         
-        drawWeatherIcon(rightX + 42, rowY + 8, forecast[i].icon, 6);
+        drawWeatherIcon(rightX + 40, rowY + 7, forecast[i].icon, 5);
         
         char foreStr[16];
         snprintf(foreStr, sizeof(foreStr), "%.0f/%.0f", forecast[i].tempMin, forecast[i].tempMax);
         tft.setTextColor(dimColor, cardColor);
-        tft.setTextDatum(TL_DATUM);
-        tft.drawString(foreStr, rightX + 58, rowY + 4, 2);
+        tft.drawString(foreStr, rightX + 55, rowY + 3, 2);
+    }
+}
+
+// =====================================================================
+// TELA DE ALARMES
+// =====================================================================
+
+void drawAlarmsScreen() {
+    tft.fillScreen(bgColor);
+    
+    // Botão voltar
+    drawButton(BTN_BACK_X, BTN_BACK_Y, BTN_BACK_W, BTN_BACK_H, "<< VOL", accentColor, bgColor);
+    
+    // Título
+    tft.setTextColor(accentColor, bgColor);
+    tft.setTextDatum(TC_DATUM);
+    tft.drawString("ALARMES", SCREEN_WIDTH/2, 14, 4);
+    
+    // Linha
+    tft.drawFastHLine(10, 42, SCREEN_WIDTH - 20, cardBorder);
+    
+    // Lista de alarmes
+    int startY = 50;
+    bool anyAlarm = false;
+    
+    for (int i = 0; i < MAX_ALARMS; i++) {
+        if (!alarms[i].enabled) continue;
+        anyAlarm = true;
+        
+        int rowY = startY;
+        startY += 36;
+        
+        // Card do alarme
+        drawRoundRect(8, rowY, SCREEN_WIDTH - 16, 32, 6, cardColor);
+        
+        // Horário
+        char timeStr[6];
+        snprintf(timeStr, sizeof(timeStr), "%02d:%02d", alarms[i].hour, alarms[i].minute);
+        tft.setTextColor(textColor, cardColor);
+        tft.setTextDatum(ML_DATUM);
+        tft.drawString(timeStr, 20, rowY + 16, 4);
+        
+        // Label
+        if (strlen(alarms[i].label) > 0) {
+            tft.setTextColor(dimColor, cardColor);
+            tft.setTextDatum(ML_DATUM);
+            tft.drawString(alarms[i].label, 100, rowY + 16, 2);
+        }
+        
+        // Indicador ativo (bolinha verde)
+        tft.fillCircle(SCREEN_WIDTH - 24, rowY + 16, 5, TFT_GREEN);
+    }
+    
+    if (!anyAlarm) {
+        tft.setTextColor(dimColor, bgColor);
+        tft.setTextDatum(MC_DATUM);
+        tft.drawString("Nenhum alarme ativo", SCREEN_WIDTH/2, 120, 2);
+        tft.drawString("Configure pelo navegador:", SCREEN_WIDTH/2, 150, 1);
+        if (WiFi.status() == WL_CONNECTED) {
+            tft.setTextColor(accentColor, bgColor);
+            tft.drawString("http://" + WiFi.localIP().toString(), SCREEN_WIDTH/2, 168, 2);
+        }
+    }
+    
+    // IP no rodapé
+    if (WiFi.status() == WL_CONNECTED) {
+        tft.setTextColor(dimColor, bgColor);
+        tft.setTextDatum(BC_DATUM);
+        tft.drawString("http://" + WiFi.localIP().toString(), SCREEN_WIDTH/2, SCREEN_HEIGHT - 4, 1);
     }
 }
 
@@ -560,13 +603,11 @@ void fetchWeather() {
     if (apiKey.length() == 0 || WiFi.status() != WL_CONNECTED) return;
     
     HTTPClient http;
-    
     String url = "http://api.openweathermap.org/data/2.5/weather?q=" + cityName 
                  + "&appid=" + apiKey + "&units=metric&lang=pt_br";
     
     http.begin(url);
     int httpCode = http.GET();
-    
     if (httpCode == 200) {
         String payload = http.getString();
         JsonDocument doc;
@@ -587,10 +628,8 @@ void fetchWeather() {
     // Forecast
     url = "http://api.openweathermap.org/data/2.5/forecast?q=" + cityName 
           + "&appid=" + apiKey + "&units=metric&lang=pt_br";
-    
     http.begin(url);
     httpCode = http.GET();
-    
     if (httpCode == 200) {
         String payload = http.getString();
         JsonDocument doc;
@@ -601,7 +640,6 @@ void fetchWeather() {
             int today = timeinfo.tm_mday;
             int forecastIdx = 0;
             int lastDay = -1;
-            
             for (JsonObject item : list) {
                 if (forecastIdx >= 3) break;
                 long dt = item["dt"];
@@ -625,7 +663,7 @@ void fetchWeather() {
     }
     http.end();
     
-    displayWeather();
+    if (currentState == STATE_CLOCK) displayWeather();
 }
 
 // =====================================================================
@@ -633,27 +671,23 @@ void fetchWeather() {
 // =====================================================================
 
 void checkAlarms() {
-    if (alarmRinging) return;  // Já tocando, não checa novos
-    
+    if (alarmRinging) return;
     struct tm timeinfo;
     if (!getLocalTime(&timeinfo)) return;
     
     for (int i = 0; i < MAX_ALARMS; i++) {
-        if (!alarms[i].enabled) continue;
-        if (alarms[i].triggered) continue;
-        
+        if (!alarms[i].enabled || alarms[i].triggered) continue;
         if (timeinfo.tm_hour == alarms[i].hour && timeinfo.tm_min == alarms[i].minute) {
-            // DISPARA!
             alarmRinging = true;
             alarmFlashTimer = millis();
             alarmFlashState = false;
-            Serial.printf("ALARME! %02d:%02d - %s\n", alarms[i].hour, alarms[i].minute, alarms[i].label);
             alarms[i].triggered = true;
+            Serial.printf("ALARME! %02d:%02d - %s\n", alarms[i].hour, alarms[i].minute, alarms[i].label);
             return;
         }
     }
     
-    // Reset triggered flag quando minuto muda (para disparar novamente amanhã)
+    // Reset triggered
     static int lastMinute = -1;
     if (timeinfo.tm_min != lastMinute) {
         lastMinute = timeinfo.tm_min;
@@ -668,50 +702,44 @@ void checkAlarms() {
 
 void handleAlarmDisplay() {
     if (!alarmRinging) return;
-    
-    // Pisca a tela a cada 300ms
     if (millis() - alarmFlashTimer > 300) {
         alarmFlashTimer = millis();
         alarmFlashState = !alarmFlashState;
         
         if (alarmFlashState) {
-            tft.fillScreen(COLOR_ALARM_FLASH);
-            tft.setTextColor(COLOR_RED, COLOR_ALARM_FLASH);
+            tft.fillScreen(TFT_YELLOW);
+            tft.setTextColor(TFT_RED, TFT_YELLOW);
             tft.setTextDatum(MC_DATUM);
-            tft.drawString("ALARME!", SCREEN_WIDTH/2, SCREEN_HEIGHT/2 - 30, 4);
-            
-            // Mostra label do alarme que disparou
+            tft.drawString("ALARME!", SCREEN_WIDTH/2, SCREEN_HEIGHT/2 - 35, 4);
             for (int i = 0; i < MAX_ALARMS; i++) {
                 if (alarms[i].triggered && alarms[i].enabled) {
-                    char alStr[30];
+                    char alStr[6];
                     snprintf(alStr, sizeof(alStr), "%02d:%02d", alarms[i].hour, alarms[i].minute);
-                    tft.setTextColor(TFT_BLACK, COLOR_ALARM_FLASH);
-                    tft.drawString(alStr, SCREEN_WIDTH/2, SCREEN_HEIGHT/2 + 10, 6);
+                    tft.setTextColor(TFT_BLACK, TFT_YELLOW);
+                    tft.drawString(alStr, SCREEN_WIDTH/2, SCREEN_HEIGHT/2 + 15, 7);
                     if (strlen(alarms[i].label) > 0) {
-                        tft.drawString(alarms[i].label, SCREEN_WIDTH/2, SCREEN_HEIGHT/2 + 55, 2);
+                        tft.drawString(alarms[i].label, SCREEN_WIDTH/2, SCREEN_HEIGHT/2 + 60, 2);
                     }
                     break;
                 }
             }
-            
-            tft.setTextColor(0x4208, COLOR_ALARM_FLASH);
-            tft.drawString("Toque para desligar", SCREEN_WIDTH/2, SCREEN_HEIGHT - 30, 2);
+            tft.setTextColor(0x4208, TFT_YELLOW);
+            tft.drawString("Toque para desligar", SCREEN_WIDTH/2, SCREEN_HEIGHT - 25, 2);
         } else {
-            tft.fillScreen(COLOR_RED);
-            tft.setTextColor(TFT_WHITE, COLOR_RED);
+            tft.fillScreen(TFT_RED);
+            tft.setTextColor(TFT_WHITE, TFT_RED);
             tft.setTextDatum(MC_DATUM);
-            tft.drawString("ALARME!", SCREEN_WIDTH/2, SCREEN_HEIGHT/2 - 10, 4);
+            tft.drawString("ALARME!", SCREEN_WIDTH/2, SCREEN_HEIGHT/2, 4);
         }
     }
 }
 
 void stopAlarm() {
     alarmRinging = false;
-    // Redesenha tela normal
+    currentState = STATE_CLOCK;
     applyTheme();
     drawClockScreen();
     displayWeather();
-    Serial.println("Alarme desligado pelo toque");
 }
 
 // =====================================================================
@@ -721,28 +749,90 @@ void stopAlarm() {
 void drawAPScreen() {
     tft.fillScreen(TFT_BLACK);
     tft.fillRoundRect(10, 10, SCREEN_WIDTH - 20, SCREEN_HEIGHT - 20, 12, COLOR_DARK_CARD);
-    
     tft.setTextDatum(MC_DATUM);
-    tft.setTextColor(COLOR_CYAN, COLOR_DARK_CARD);
+    tft.setTextColor(TFT_CYAN, COLOR_DARK_CARD);
     tft.drawString("CONFIGURACAO", SCREEN_WIDTH/2, 45, 4);
-    
     tft.setTextColor(TFT_WHITE, COLOR_DARK_CARD);
     tft.drawString("Conecte no WiFi:", SCREEN_WIDTH/2, 85, 2);
-    
-    tft.setTextColor(COLOR_ORANGE, COLOR_DARK_CARD);
+    tft.setTextColor(TFT_ORANGE, COLOR_DARK_CARD);
     tft.drawString(AP_SSID, SCREEN_WIDTH/2, 115, 4);
-    
     tft.setTextColor(TFT_WHITE, COLOR_DARK_CARD);
     tft.drawString("Senha: " + String(AP_PASS), SCREEN_WIDTH/2, 148, 2);
-    
-    tft.setTextColor(COLOR_CYAN, COLOR_DARK_CARD);
+    tft.setTextColor(TFT_CYAN, COLOR_DARK_CARD);
     tft.drawString("http://192.168.4.1", SCREEN_WIDTH/2, 180, 2);
-    
     tft.setTextColor(0x4208, COLOR_DARK_CARD);
     tft.drawString("abra no navegador", SCREEN_WIDTH/2, 205, 1);
 }
 
-void handleRoot() { server.send(200, "text/html", HTML_PAGE); }
+void handleRoot() {
+    // Gera página com valores atuais
+    String page = F("<!DOCTYPE html><html><head><meta charset=\"UTF-8\">"
+    "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1.0\">"
+    "<title>Relogio CYD</title><style>"
+    "*{box-sizing:border-box;margin:0;padding:0}"
+    "body{font-family:-apple-system,sans-serif;background:#0f0f23;color:#eee;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:16px}"
+    ".c{background:#1a1a3e;border-radius:16px;padding:24px;width:100%;max-width:460px;box-shadow:0 10px 40px rgba(0,0,0,0.4)}"
+    "h1{text-align:center;margin-bottom:4px;font-size:1.3em;color:#0ff}"
+    ".sub{text-align:center;color:#888;margin-bottom:18px;font-size:0.82em}"
+    "h2{color:#0ff;font-size:1em;margin:18px 0 10px;padding-top:14px;border-top:1px solid #333}"
+    "label{display:block;margin-bottom:3px;font-weight:500;color:#aaa;font-size:0.85em}"
+    "input,select{width:100%;padding:10px;border:1px solid #333;border-radius:8px;background:#0a1628;color:#fff;font-size:14px;margin-bottom:12px;outline:none}"
+    "input:focus,select:focus{border-color:#0ff}"
+    ".row{display:flex;gap:10px}.row>div{flex:1}"
+    "button{width:100%;padding:13px;background:linear-gradient(135deg,#0ff,#00bcd4);border:none;border-radius:8px;color:#0a1628;font-size:15px;font-weight:bold;cursor:pointer;margin-top:8px}"
+    "button:active{transform:scale(0.98)}"
+    ".alarm-row{display:flex;gap:8px;align-items:center;margin-bottom:8px;background:#0a1628;padding:8px 10px;border-radius:8px}"
+    ".alarm-row input[type=time]{width:100px;margin:0;padding:8px;flex-shrink:0}"
+    ".alarm-row input[type=text]{flex:1;margin:0;padding:8px}"
+    ".alarm-row input[type=checkbox]{width:20px;height:20px;margin:0;flex-shrink:0;accent-color:#0ff}"
+    ".alarm-label{color:#666;font-size:0.75em;display:flex;gap:8px;margin-bottom:4px}.alarm-label span{flex:1}"
+    ".info{background:#0a1628;border-radius:8px;padding:10px;margin-top:14px;font-size:0.78em;color:#666;line-height:1.4}.info a{color:#0ff}"
+    "</style></head><body><div class=\"c\">"
+    "<h1>&#9201; Relogio CYD</h1><p class=\"sub\">WiFi + Clima + Alarmes</p>"
+    "<form action=\"/save\" method=\"POST\">");
+    
+    page += "<label>Nome da Rede (SSID)</label>";
+    page += "<input type=\"text\" name=\"ssid\" value=\"" + savedSSID + "\" required>";
+    page += "<label>Senha do WiFi</label>";
+    page += "<input type=\"password\" name=\"pass\" value=\"" + savedPassword + "\">";
+    page += "<div class=\"row\"><div><label>Cidade</label>";
+    page += "<input type=\"text\" name=\"city\" value=\"" + cityName + "\"></div>";
+    page += "<div><label>Fuso (GMT)</label><select name=\"gmt\">";
+    
+    int gmtOptions[] = {-5, -4, -3, -2, 0, 1};
+    const char* gmtLabels[] = {"-5 Acre", "-4 Manaus", "-3 Brasilia", "-2 Noronha", "+0 Londres", "+1 Europa"};
+    for (int i = 0; i < 6; i++) {
+        page += "<option value=\"" + String(gmtOptions[i]) + "\"";
+        if (gmtOffset == gmtOptions[i]) page += " selected";
+        page += ">" + String(gmtLabels[i]) + "</option>";
+    }
+    page += "</select></div></div>";
+    
+    page += "<label>API Key OpenWeatherMap</label>";
+    page += "<input type=\"text\" name=\"apikey\" value=\"" + apiKey + "\">";
+    
+    page += "<h2>&#9200; Alarmes</h2>";
+    page += "<div class=\"alarm-label\"><span>Ativo</span><span>Hora</span><span>Descricao</span></div>";
+    
+    for (int i = 0; i < MAX_ALARMS; i++) {
+        char timeStr[6];
+        snprintf(timeStr, sizeof(timeStr), "%02d:%02d", alarms[i].hour, alarms[i].minute);
+        
+        page += "<div class=\"alarm-row\">";
+        page += "<input type=\"checkbox\" name=\"al" + String(i) + "_on\"";
+        if (alarms[i].enabled) page += " checked";
+        page += ">";
+        page += "<input type=\"time\" name=\"al" + String(i) + "_time\" value=\"" + String(timeStr) + "\">";
+        page += "<input type=\"text\" name=\"al" + String(i) + "_lbl\" value=\"" + String(alarms[i].label) + "\">";
+        page += "</div>";
+    }
+    
+    page += "<button type=\"submit\">Salvar e Conectar</button></form>";
+    page += "<div class=\"info\">Clima: crie conta gratis em <a href=\"https://openweathermap.org/api\" target=\"_blank\">openweathermap.org</a> e cole a API key.<br>Alarmes: a tela pisca ao disparar. Toque para desligar.</div>";
+    page += "</div></body></html>";
+    
+    server.send(200, "text/html", page);
+}
 
 void handleSave() {
     String ssid = server.arg("ssid");
@@ -755,25 +845,20 @@ void handleSave() {
         server.send(400, "text/plain", "SSID obrigatorio!");
         return;
     }
-    
     if (city.length() == 0) city = "Florianopolis";
     saveConfig(ssid, pass, key, city, gmt);
     
-    // Salva alarmes
     for (int i = 0; i < MAX_ALARMS; i++) {
         char keyOn[10], keyTime[12], keyLbl[12];
         snprintf(keyOn, sizeof(keyOn), "al%d_on", i);
         snprintf(keyTime, sizeof(keyTime), "al%d_time", i);
         snprintf(keyLbl, sizeof(keyLbl), "al%d_lbl", i);
-        
         alarms[i].enabled = server.hasArg(keyOn);
-        
         String timeVal = server.arg(keyTime);
         if (timeVal.length() >= 5) {
             alarms[i].hour = timeVal.substring(0, 2).toInt();
             alarms[i].minute = timeVal.substring(3, 5).toInt();
         }
-        
         String lbl = server.arg(keyLbl);
         strncpy(alarms[i].label, lbl.c_str(), sizeof(alarms[i].label) - 1);
         alarms[i].label[sizeof(alarms[i].label) - 1] = '\0';
@@ -801,7 +886,14 @@ void startAPMode() {
     server.onNotFound(handleNotFound);
     server.begin();
     drawAPScreen();
-    Serial.println("AP Mode: " + WiFi.softAPIP().toString());
+}
+
+// Mantém o WebServer ativo no modo station para acesso via IP local
+void startStationWebServer() {
+    server.on("/", handleRoot);
+    server.on("/save", HTTP_POST, handleSave);
+    server.begin();
+    Serial.println("WebUI disponivel em: http://" + WiFi.localIP().toString());
 }
 
 // =====================================================================
@@ -839,15 +931,15 @@ void syncTime() {
 }
 
 // =====================================================================
-// TOUCH
+// TOUCH HANDLING
 // =====================================================================
 
 void handleTouch() {
     if (touchscreen.tirqTouched() && touchscreen.touched()) {
-        // Se alarme tocando, qualquer toque desliga
+        // Alarme tocando: qualquer toque desliga
         if (alarmRinging) {
             stopAlarm();
-            delay(300);  // debounce
+            delay(300);
             return;
         }
         
@@ -856,7 +948,7 @@ void handleTouch() {
             touchStartTime = millis();
         }
         
-        // Toque longo: reset
+        // Toque longo: reset config
         if (millis() - touchStartTime > 3000) {
             clearConfig();
             delay(300);
@@ -867,13 +959,43 @@ void handleTouch() {
             unsigned long dur = millis() - touchStartTime;
             touchActive = false;
             
-            if (dur < 800 && millis() - lastTouchTime > 300) {
+            if (dur < 600 && millis() - lastTouchTime > 400) {
                 lastTouchTime = millis();
-                darkTheme = !darkTheme;
-                applyTheme();
-                saveTheme();
-                drawClockScreen();
-                displayWeather();
+                
+                // Lê coordenadas do toque
+                TS_Point p = touchscreen.getPoint();
+                int tx = map(p.x, 200, 3700, 0, SCREEN_WIDTH);
+                int ty = map(p.y, 200, 3800, 0, SCREEN_HEIGHT);
+                
+                if (currentState == STATE_CLOCK) {
+                    // Verifica botão TEMA
+                    if (touchInZone(tx, ty, BTN_THEME_X, BTN_THEME_Y, BTN_THEME_W, BTN_THEME_H)) {
+                        darkTheme = !darkTheme;
+                        applyTheme();
+                        saveTheme();
+                        drawClockScreen();
+                        displayWeather();
+                        return;
+                    }
+                    // Verifica botão ALARMES
+                    if (touchInZone(tx, ty, BTN_ALARM_X, BTN_ALARM_Y, BTN_ALARM_W, BTN_ALARM_H)) {
+                        currentState = STATE_ALARMS;
+                        drawAlarmsScreen();
+                        return;
+                    }
+                } else if (currentState == STATE_ALARMS) {
+                    // Botão voltar
+                    if (touchInZone(tx, ty, BTN_BACK_X, BTN_BACK_Y, BTN_BACK_W, BTN_BACK_H)) {
+                        currentState = STATE_CLOCK;
+                        drawClockScreen();
+                        displayWeather();
+                        return;
+                    }
+                    // Toque em qualquer outra área também volta
+                    currentState = STATE_CLOCK;
+                    drawClockScreen();
+                    displayWeather();
+                }
             }
         }
     }
@@ -889,6 +1011,9 @@ void setup() {
     
     tft.init();
     tft.setRotation(1);
+    // Corrige ordem de cores: troca de BGR para RGB via MADCTL
+    tft.writecommand(0x36);  // MADCTL
+    tft.writedata(0x28);     // MV=1, MX=0, MY=0, RGB order (sem BGR)
     tft.fillScreen(TFT_BLACK);
     
     pinMode(TFT_BL, OUTPUT);
@@ -905,6 +1030,7 @@ void setup() {
         if (connectWiFi()) {
             syncTime();
             currentState = STATE_CLOCK;
+            startStationWebServer();  // WebUI acessível pelo IP
             drawClockScreen();
             fetchWeather();
         } else {
@@ -927,7 +1053,9 @@ void loop() {
             break;
             
         case STATE_CLOCK: {
-            // Se alarme está tocando, prioriza o flash
+            // WebServer para reconfiguração pelo IP
+            server.handleClient();
+            
             if (alarmRinging) {
                 handleAlarmDisplay();
                 handleTouch();
@@ -940,14 +1068,12 @@ void loop() {
                 displayClock();
             }
             
-            // Checa alarmes a cada segundo
             static unsigned long lastAlarmCheck = 0;
             if (millis() - lastAlarmCheck >= 1000) {
                 lastAlarmCheck = millis();
                 checkAlarms();
             }
             
-            // Atualiza clima a cada 10 min
             if (millis() - lastWeatherUpdate >= WEATHER_INTERVAL) {
                 lastWeatherUpdate = millis();
                 fetchWeather();
@@ -955,7 +1081,6 @@ void loop() {
             
             handleTouch();
             
-            // Reconecta WiFi
             static unsigned long lastReconnect = 0;
             if (WiFi.status() != WL_CONNECTED && millis() - lastReconnect > 30000) {
                 lastReconnect = millis();
@@ -963,6 +1088,22 @@ void loop() {
             }
             break;
         }
+        
+        case STATE_ALARMS:
+            server.handleClient();
+            handleTouch();
+            
+            // Continua checando alarmes mesmo na tela de alarmes
+            static unsigned long lastAlarmCheckAl = 0;
+            if (millis() - lastAlarmCheckAl >= 1000) {
+                lastAlarmCheckAl = millis();
+                checkAlarms();
+            }
+            if (alarmRinging) {
+                handleAlarmDisplay();
+            }
+            break;
+            
         default: break;
     }
     delay(10);
